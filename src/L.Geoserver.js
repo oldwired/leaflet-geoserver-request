@@ -19,6 +19,20 @@ L.Geoserver = L.FeatureGroup.extend({
     height: 500,
   },
 
+  // debounce function
+  _debounce: function(func, wait) {
+    let timeout;
+    return (...args) => {
+      const context = this;
+      const later = () => {
+        clearTimeout(timeout);
+        func.apply(context, args);
+      };
+      clearTimeout(timeout);
+      timeout = setTimeout(later, wait);
+    };
+  },
+
   // constructor function
   initialize: function (baseLayerUrl, options) {
     this.baseLayerUrl = baseLayerUrl;
@@ -30,11 +44,18 @@ L.Geoserver = L.FeatureGroup.extend({
     this.state = {
       exist: "exist",
     };
+    this._debouncedFetchAndAddLayers = this._debounce(this._fetchAndAddLayers, 250);
+  },
+
+  redraw: function() { //wfs only
+    this.clearLayers();
+    this._debouncedFetchAndAddLayers();
+    return this;
   },
 
   //wms layer function
   wms: function () {
-    
+
     if (!this.options.version) {
       this.options.version = '1.1.1';
     }
@@ -42,73 +63,86 @@ L.Geoserver = L.FeatureGroup.extend({
     return L.tileLayer.wms(this.baseLayerUrl, this.options);
   },
 
-  //wfs layer fetching function
-  //Note this function will work only for vector layer
-  wfs: function () {
+  _fetchAndAddLayers: function() {
     var that = this;
+    var callbackName = 'getJson_' + Math.random().toString(36).substr(2, 9);
 
-    if (!this.options.version) {
-      this.options.version = '1.1.0';
-    }
-    //Geoserver Web Feature Service
+    window[callbackName] = function(data) {
+      delete window[callbackName];
+      that._addLayers(data);
+    };
+
     $.ajax(this.baseLayerUrl, {
       type: "GET",
-
       data: {
         service: "WFS",
-        version: this.options.version,
+        version: this.options.version || '1.1.0',
         request: "GetFeature",
         typename: this.options.layers,
         CQL_FILTER: this.options.CQL_FILTER,
         srsname: this.options.srsname,
         outputFormat: "text/javascript",
-        format_options: "callback: getJson",
+        format_options: "callback:" + callbackName,
       },
-
       dataType: "jsonp",
-      jsonpCallback: "getJson",
-      success: function (data) {
-        var layers = [];
-
-        // push all the layers to the layers array
-        for (var i = 0; i < data.features.length; i++) {
-          var layer = L.GeoJSON.geometryToLayer(
-            data.features[i],
-            that.options || null
-          );
-
-          layer.feature = data.features[i];
-          layer.options.onEachFeature = that.options.onEachFeature(
-            layer.feature,
-            layer
-          );
-
-          layers.push(layer);
-        }
-
-        // for adding styles to the geojson feature
-        if (typeof that.options.style === "function") {
-          for (i = 0; i < layers.length; i++) {
-            that.addLayer(layers[i]);
-            if (layers[i].setStyle) {
-              // check if setStyle method exists
-              layers[i].setStyle(that.options.style(layers[i].feature));
-            }
-          }
-        } else {
-          for (i = 0; i < layers.length; i++) {
-            that.addLayer(layers[i]);
-            that.setStyle(that.options.style);
-          }
-        }
-
-        if (that.options.fitLayer) {
-          that._map.fitBounds(that.getBounds());
-        }
-      },
-    }).fail(function (jqXHR, textStatus, error) {
+      jsonpCallback: callbackName,
+      success: function(data) {
+        // This will be handled by the callback function we defined
+      }
+    }).fail(function(jqXHR, textStatus, error) {
       console.log(jqXHR, textStatus, error);
     });
+  },
+
+  _addLayers: function(data) {
+    var that = this;
+    var layers = [];
+
+    for (var i = 0; i < data.features.length; i++) {
+      var layer = L.GeoJSON.geometryToLayer(
+          data.features[i],
+          that.options || null
+      );
+
+      layer.feature = data.features[i];
+      layer.options.onEachFeature = that.options.onEachFeature(
+          layer.feature,
+          layer
+      );
+
+      layers.push(layer);
+    }
+
+    if (typeof that.options.style === "function") {
+      for (i = 0; i < layers.length; i++) {
+        that.addLayer(layers[i]);
+        if (layers[i].setStyle) {
+          layers[i].setStyle(that.options.style(layers[i].feature));
+        }
+      }
+    } else {
+      for (i = 0; i < layers.length; i++) {
+        that.addLayer(layers[i]);
+        that.setStyle(that.options.style);
+      }
+    }
+
+    if (that.options.fitLayer) {
+      that._map.fitBounds(that.getBounds());
+    }
+  },
+
+  //wfs layer fetching function
+  //Note this function will work only for vector layer
+
+  wfs: function() {
+    var that = this;
+
+    if (!that.options.version) {
+      that.options.version = '1.1.0';
+    }
+
+    that._fetchAndAddLayers();
 
     return that;
   },
@@ -121,9 +155,9 @@ L.Geoserver = L.FeatureGroup.extend({
       var div = L.DomUtil.create("div", "info Legend");
       var url = `${that.baseLayerUrl}/wms?REQUEST=GetLegendGraphic&VERSION=${that.options.version}&FORMAT=image/png&LAYER=${that.options.layers}&style=${that.options.style}`;
       div.innerHTML +=
-        "<img src=" +
-        url +
-        ' alt="legend" data-toggle="tooltip" title="Map legend">';
+          "<img src=" +
+          url +
+          ' alt="legend" data-toggle="tooltip" title="Map legend">';
       return div;
     };
     return legend;
@@ -163,15 +197,15 @@ L.Geoserver = L.FeatureGroup.extend({
 
         //final wmsLayerUrl
         var wmsLayerURL = `${
-          that.baseLayerUrl
+            that.baseLayerUrl
         }/wms?service=WMS&version=1.3.0&request=GetMap&\
 layers=${otherLayers}&\
 styles=${otherStyle}&\
 cql_filter=${otherCqlFilter}&\
 bbox=${(bboxX1 + bboxX2) * 0.5 - maxValue - bufferBbox},${
-          (bboxY1 + bboxY2) * 0.5 - maxValue - bufferBbox
+            (bboxY1 + bboxY2) * 0.5 - maxValue - bufferBbox
         },${(bboxX1 + bboxX2) * 0.5 + maxValue + bufferBbox},${
-          (bboxY1 + bboxY2) * 0.5 + maxValue + bufferBbox
+            (bboxY1 + bboxY2) * 0.5 + maxValue + bufferBbox
         }&\
 width=${that.options.width}&\
 height=${that.options.height}&\

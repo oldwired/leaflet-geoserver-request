@@ -82,6 +82,12 @@ wfsLayer.addTo(map);
 | CQL_FILTER    | string             | INCLUDE   | To filter the layer based on their attribute. [read more about this](https://docs.geoserver.org/latest/en/user/tutorials/cql/cql_tutorial.html) |
 | fitLayer      | boolean            | true      | The map automatically zoomed into the loaded data region                                                                                        |
 
+##### WFS only #####
+| function | description |
+| -------- | ----------- |
+| redraw() | redraw the layers |  
+redraw function is only applicable for WFS request. It will clear all layers and redraw the layers.
+
 ### Web-Mapping-Service-Image (WMSImage) request
 
 This is the custom request naming by me. It will generate the image which will zoomed to the desired location. The main different between `wms` and `wmsImage` request is, it can be zoomed to the desired location based on vector layer.
