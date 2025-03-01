@@ -19,7 +19,9 @@ L.Geoserver = L.FeatureGroup.extend({
     height: 500,
     onError: function(error) {
       console.error("GeoServer request error:", error);
-    }
+    },
+    maxZoom: 18,
+    minZoom: 0,
   },
 
   // debounce function
@@ -52,8 +54,15 @@ L.Geoserver = L.FeatureGroup.extend({
     this._debouncedFetchAndAddLayers = this._debounce(this._fetchAndAddLayers, 250);
   },
 
-  redraw: function() {
+  redraw: function(options) {
     const now = Date.now();
+    options = options || {};
+    
+    // Store any temporary overrides for this redraw operation
+    const originalFitLayer = this.options.fitLayer;
+    if (options.fitLayer !== undefined) {
+      this.options.fitLayer = options.fitLayer;
+    }
     
     // If redraw is called too frequently, adjust the debounce delay
     if (now - this._lastRedraw < this._minRedrawInterval) {
@@ -70,18 +79,23 @@ L.Geoserver = L.FeatureGroup.extend({
     
     this._lastRedraw = now;
     this.clearLayers();
+    // This will eventually call _addLayers which respects maxZoom and minZoom options when fitting bounds
     this._debouncedFetchAndAddLayers();
+    
+    // Restore original options
+    this.options.fitLayer = originalFitLayer;
+    
     return this;
   },
 
   //wms layer function
   wms: function () {
-
     if (!this.options.version) {
       this.options.version = '1.1.1';
     }
 
-    return L.tileLayer.wms(this.baseLayerUrl, this.options);
+    this._wmsLayer = L.tileLayer.wms(this.baseLayerUrl, this.options);
+    return this._wmsLayer;
   },
 
   _getUniqueCallbackId: function() {
@@ -172,7 +186,10 @@ L.Geoserver = L.FeatureGroup.extend({
       if (endIdx < features.length) {
         setTimeout(() => processBatch(endIdx), 0);
       } else if (this.options.fitLayer && this._map) {
-        this._map.fitBounds(this.getBounds());
+        this._map.fitBounds(this.getBounds(), {
+          maxZoom: this.options.maxZoom,
+          minZoom: this.options.minZoom
+        });
         this.fire('loaded');
       }
     };
@@ -299,11 +316,30 @@ L.Geoserver = L.FeatureGroup.extend({
     
     return this;
   },
+
+  // Function to redraw WMS layer
+  redrawWms: function(options) {
+    if (this._wmsLayer) {
+      // Set a new parameter to bust cache
+      this._wmsLayer.setParams({
+        _ts: Date.now()
+      });
+    }
+    return this;
+  },
 });
 
 L.Geoserver.wms = function (baseLayerUrl, options) {
   const req = new L.Geoserver(baseLayerUrl, options);
-  return req.wms();
+  const wmsLayer = req.wms();
+  
+  // Add redrawWms method to the returned layer
+  wmsLayer.redraw = function(options) {
+    req.redrawWms(options);
+    return this;
+  };
+  
+  return wmsLayer;
 };
 
 L.Geoserver.wfs = function (baseLayerUrl, options) {

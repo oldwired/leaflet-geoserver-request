@@ -42,15 +42,18 @@ wmsLayer.addTo(map);
 
 ##### WMS options
 
-| Option      | Type    | Default   | Description                                                                                                                                     |
-| ----------- | ------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| layers      | string  | undefined | This is required filed. If you have multiple layers, you can add them in a comma seperated values: "workspace:layer1,workspace:layer2"          |
-| format      | string  | image/png | formate of the wms request. It may be image/jpeg, image/tiff, application/openlayers                                                            |
-| transparent | boolean | true      | transparent of the map                                                                                                                          |
-| CQL_FILTER  | string  | INCLUDE   | To filter the layer based on their attribute. [read more about this](https://docs.geoserver.org/latest/en/user/tutorials/cql/cql_tutorial.html) |
-| zIndex      | integer | 1000      | zIndex of the layer                                                                                                                             |
-| attribution | string  | layer     | attribution of the layer. It will be added at the bottom-left cornor of the map                                                                 |
-| style       | string  | undefined | style file associated with that layer. If you didn't provide the style field, it will take default style of the layer                           |
+| Option      | Type     | Default   | Description                                                                                                                                     |
+| ----------- | -------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| layers      | string   | undefined | This is required filed. If you have multiple layers, you can add them in a comma seperated values: "workspace:layer1,workspace:layer2"          |
+| format      | string   | image/png | formate of the wms request. It may be image/jpeg, image/tiff, application/openlayers                                                            |
+| transparent | boolean  | true      | transparent of the map                                                                                                                          |
+| CQL_FILTER  | string   | INCLUDE   | To filter the layer based on their attribute. [read more about this](https://docs.geoserver.org/latest/en/user/tutorials/cql/cql_tutorial.html) |
+| zIndex      | integer  | 1000      | zIndex of the layer                                                                                                                             |
+| attribution | string   | layer     | attribution of the layer. It will be added at the bottom-left cornor of the map                                                                 |
+| style       | string   | undefined | style file associated with that layer. If you didn't provide the style field, it will take default style of the layer                           |
+| onError     | function | null      | Function to be called when an error occurs. The error object is passed as an argument to this function                                           |
+| maxZoom     | integer  | 18        | Maximum zoom level for the layer                                                                                                                |
+| minZoom     | integer  | 0         | Minimum zoom level for the layer                                                                                                                |
 
 ### Web-Feature-Service (WFS) Request
 
@@ -81,12 +84,74 @@ wfsLayer.addTo(map);
 | onEachFeature | function           | null      | Common region to add this feature is to add popup when the layer cicked. [more detail](https://leafletjs.com/examples/geojson/)                 |
 | CQL_FILTER    | string             | INCLUDE   | To filter the layer based on their attribute. [read more about this](https://docs.geoserver.org/latest/en/user/tutorials/cql/cql_tutorial.html) |
 | fitLayer      | boolean            | true      | The map automatically zoomed into the loaded data region                                                                                        |
+| maxZoom       | integer            | 18        | Maximum zoom level that will be used when auto-zooming to features                                                                              |
+| minZoom       | integer            | 0         | Minimum zoom level that will be used when auto-zooming to features                                                                              |
+| onError       | function           | null      | Function to be called when an error occurs. The error object is passed as an argument to this function                                           |
 
-##### WFS only #####
-| function | description |
-| -------- | ----------- |
-| redraw() | redraw the layers |  
-redraw function is only applicable for WFS request. It will clear all layers and redraw the layers.
+### Layer Redraw Functions
+
+Both WFS and WMS layers support redraw functionality, which allows you to refresh the layers when data has changed or when you need to update the display.
+
+#### WFS Layer Redraw
+
+```js
+// Basic redraw
+wfsLayer.redraw();
+
+// Redraw with options
+wfsLayer.redraw({
+  fitLayer: false  // Don't auto-fit the map to layer bounds
+});
+```
+
+The WFS redraw function:
+- Clears all existing features from the layer
+- Makes a new WFS request to fetch the latest data from GeoServer
+- Re-adds all features to the map with current styling
+- Includes debouncing to prevent too frequent server requests
+- Will re-fit the map to the layer bounds if `fitLayer` option is true (default)
+- Respects `maxZoom` and `minZoom` options when fitting bounds
+
+#### WMS Layer Redraw
+
+```js
+// Basic redraw
+wmsLayer.redraw();
+
+// Redraw with options
+wmsLayer.redraw({
+  fitLayer: false  // Options parameter works the same as for WFS
+});
+```
+
+The WMS redraw function:
+- Updates the WMS request with a timestamp parameter to bypass browser caching
+- Forces the WMS tiles to be refreshed with the latest data from GeoServer
+- Doesn't require clearing and re-adding the layer
+
+#### Performance Considerations
+
+The redraw functions include several performance optimizations:
+
+- **Debouncing**: Rapid consecutive calls to redraw are debounced to prevent overwhelming the server with requests. If you call redraw multiple times in quick succession, only the last call will execute after a short delay.
+
+- **Automatic Throttling**: The plugin automatically adjusts the debounce delay if redraw is called too frequently, helping prevent performance issues.
+
+- **Request Cancellation**: When redrawing WFS layers, any in-progress fetch requests are cancelled before starting a new one, preventing race conditions and reducing server load.
+
+- **Batched Processing**: Large WFS datasets are processed in batches to maintain UI responsiveness.
+
+```js
+// Example of triggering redraw on a button click
+document.getElementById('refresh-button').addEventListener('click', function() {
+  wfsLayer.redraw();
+});
+
+// Example of redrawing on a timer
+setInterval(function() {
+  wmsLayer.redraw();
+}, 30000); // Refresh every 30 seconds
+```
 
 ### Web-Mapping-Service-Image (WMSImage) request
 
@@ -122,6 +187,9 @@ L.Geoserver.wmsImage("http://localhost:8080/geoserver/wms", {
   wmsId: "wmsImage",
   width: 300,
   height: 300,
+  onError: function(error) {
+    console.error("WMS Image error:", error);
+  }
 });
 ```
 
@@ -137,6 +205,32 @@ var layerLegend = L.Geoserver.legend("http://localhost:8080/geoserver/wms", {
 
 layerLegend.addTo(map);
 ```
+
+### Error Handling
+
+All request types (WMS, WFS, WMSImage) support error handling through the `onError` option. This allows you to provide a custom function to handle errors that occur during requests.
+
+```js
+// Example of error handling with WFS
+var wfsLayer = L.Geoserver.wfs("http://localhost:8080/geoserver/wfs", {
+  layers: "topp:tasmania_roads",
+  onError: function(error) {
+    console.error("Custom error handler:", error);
+    // Show user notification, log to server, etc.
+  }
+});
+
+// The default error handler logs to console
+// onError: function(error) {
+//   console.error("GeoServer request error:", error);
+// }
+```
+
+The error handling includes:
+- Network errors during requests
+- Invalid responses from GeoServer
+- JSONP request timeouts (for WFS)
+- Request cancellation during rapid redraws
 
 ### Advance WFS request demo
 
